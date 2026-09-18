@@ -76,6 +76,76 @@ select option {
   border-radius: 99px;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+.katex {
+  color: #e8d7b0;
+  font-size: 1.12em;
+}
+
+.formula-box .katex {
+  font-size: 1.2em;
+}
+
+.katex .base {
+  color: #e8d7b0;
+}
+
+.story {
+  color: #8b8a84;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.story p {
+  text-wrap: pretty;
+}
+
+.story b {
+  color: #eceae4;
+  font-weight: 550;
+}
+
+.story em {
+  color: #eceae4;
+  font-style: italic;
+}
+
+.story aside {
+  margin-top: 0.75rem;
+  border-left: 2px solid #d4b483;
+  padding: 0.35rem 0 0.35rem 1rem;
+  color: #8b8a84;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.story aside b {
+  display: block;
+  margin-bottom: 0.2rem;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #d4b483;
+}
+
+.story blockquote {
+  margin: 1rem 0 0;
+  border-left: 2px solid #26272e;
+  padding-left: 1rem;
+  color: #eceae4;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-style: italic;
+  line-height: 1.55;
+}
+
+.story-lede::first-letter {
+  float: left;
+  padding-right: 0.12em;
+  font-family: var(--font-display);
+  font-size: 3.15em;
+  font-weight: 500;
+  line-height: 0.82;
+  color: #eceae4;
 }

@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { STAGES, type StageId } from './content/stages'
 import { DEFAULT_CONFIG, type ModelConfig } from './engine/types'
 import { runModel, tokensForView } from './engine/transformer'
 import { Field, Select, Slider } from './components/Fields'
 import { StageNav } from './components/StageNav'
+import { Pipeline } from './viz/Pipeline'
+import { ColorSlide, PipelineLegend } from './viz/ColorLegend'
 import { Glossary, StageView } from './stages/StageView'
 
 const EXAMPLES = [
@@ -23,8 +25,32 @@ export default function App() {
   const [layer, setLayer] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [glossary, setGlossary] = useState(false)
+  const [colors, setColors] = useState(false)
 
   const patch = (p: Partial<ModelConfig>) => setCfg((c) => ({ ...c, ...p }))
+  const booted = useRef(false)
+
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search)
+    const q = p.get('q')
+    if (q) setText(q)
+    const arch = p.get('arch')
+    if (arch === 'decoder' || arch === 'encoder' || arch === 'encdec') {
+      setCfg((c) => ({ ...c, architecture: arch }))
+    }
+    const t = p.get('t')
+    if (t) setCfg((c) => ({ ...c, temperature: Number(t) || c.temperature }))
+    booted.current = true
+  }, [])
+
+  useEffect(() => {
+    if (!booted.current) return
+    const p = new URLSearchParams()
+    p.set('q', text)
+    p.set('arch', cfg.architecture)
+    p.set('t', String(cfg.temperature))
+    window.history.replaceState(null, '', `${window.location.pathname}?${p.toString()}`)
+  }, [text, cfg.architecture, cfg.temperature])
 
   const trace = useMemo(() => runModel(text, target, cfg), [text, target, cfg])
   const toks = tokensForView(trace)
@@ -59,6 +85,9 @@ export default function App() {
       if (e.key === ' ') {
         e.preventDefault()
         setPlaying((p) => !p)
+      }
+      if (e.key === 'Escape') {
+        setColors(false)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -208,7 +237,11 @@ export default function App() {
           <StageNav current={stage} onPick={setStage} />
         </aside>
 
-        <main className="min-w-0 flex-1 overflow-y-auto p-5 lg:p-8">
+        <main className="min-w-0 flex-1 overflow-y-auto px-5 py-8 lg:px-10 lg:py-10">
+          <div className="mb-8">
+            <Pipeline current={stage} onPick={setStage} />
+            <PipelineLegend />
+          </div>
           <StageView
             stage={stage}
             trace={trace}
@@ -228,6 +261,24 @@ export default function App() {
           </aside>
         )}
       </div>
+
+      {colors && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/75 p-4 py-10 sm:p-8"
+          onClick={() => setColors(false)}
+        >
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-3xl">
+            <ColorSlide />
+            <button
+              type="button"
+              onClick={() => setColors(false)}
+              className="mt-4 rounded-md border border-line px-3 py-1.5 font-mono text-[11px] text-mute hover:text-ink"
+            >
+              close · esc
+            </button>
+          </div>
+        </div>
+      )}
 
       <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-line px-4 py-2">
         <div className="flex items-center gap-2">
@@ -257,6 +308,17 @@ export default function App() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setColors((c) => !c)}
+            className={
+              colors
+                ? 'rounded-md border border-gold/40 bg-gold/10 px-2 py-1 font-mono text-[11px] text-gold'
+                : 'rounded-md border border-line px-2 py-1 font-mono text-[11px] text-mute hover:text-ink'
+            }
+          >
+            colors
+          </button>
           <button
             type="button"
             onClick={() => setGlossary((g) => !g)}

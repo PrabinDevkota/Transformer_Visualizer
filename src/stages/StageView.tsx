@@ -1,16 +1,23 @@
 import { useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { GLOSSARY, STAGES, type StageId } from '../content/stages'
-import { entropy, formatNum } from '../engine/math'
+import { entropy, softmax } from '../engine/math'
 import { tokensForView } from '../engine/transformer'
+import { generateSteps, type GenStep } from '../engine/generate'
+import { classifyAttention, patternHint, patternLabel } from '../engine/patterns'
 import type { ModelConfig, Trace } from '../engine/types'
-import { Heatmap, HoverReadout } from '../viz/Heatmap'
+import { Heatmap } from '../viz/Heatmap'
 import { AttentionArcs } from '../viz/Arcs'
-import { Formula, RoPEPlanes } from '../viz/RoPE'
+import { Bipartite } from '../viz/Bipartite'
+import { NeuronContrib } from '../viz/Neuron'
+import { RoPEPlanes } from '../viz/RoPE'
+import { Formula, Tex } from '../viz/Math'
 import { TokenRow, TokenSource } from '../viz/Tokens'
 import { VectorBars, VectorStrip } from '../viz/Vectors'
-import { Chip } from '../components/Fields'
+import { Chip, Slider } from '../components/Fields'
 import { sequential } from '../viz/color'
+import { ColorSlide } from '../viz/ColorLegend'
+import { InspectPanel, fmt } from '../viz/Inspect'
 
 type Props = {
   stage: StageId
@@ -25,18 +32,39 @@ type Props = {
 
 export function StageView(props: Props) {
   const meta = STAGES.find((s) => s.id === props.stage)!
+  const [openWhy, setOpenWhy] = useState(false)
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <header className="mb-5 flex items-end justify-between gap-6">
+    <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col">
+      <header className="mb-5 flex flex-col items-center gap-3 text-center">
         <div>
           <div className="mb-1 font-mono text-[11px] uppercase tracking-[0.2em] text-faint">
             {meta.group} · {meta.n}
           </div>
-          <h2 className="font-display text-[28px] leading-none tracking-tight text-ink">{meta.title}</h2>
+          <h2 className="font-display text-[32px] leading-none tracking-tight text-ink">{meta.title}</h2>
         </div>
-        {meta.formula && <Formula>{meta.formula}</Formula>}
+        {meta.formula && <Formula latex={meta.formula} />}
       </header>
-      <p className="mb-6 max-w-3xl text-[14px] leading-6 text-mute">{meta.blurb}</p>
+      <p className="mx-auto mb-4 max-w-2xl text-center text-[15px] leading-6 text-mute">{meta.blurb}</p>
+      {meta.id !== 'color' && (
+      <div className="mx-auto mb-8 w-full max-w-2xl">
+        <button
+          type="button"
+          onClick={() => setOpenWhy((v) => !v)}
+          className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-gold"
+        >
+          {openWhy ? 'hide why' : 'why this exists'}
+        </button>
+        {openWhy && (
+          <div className="rounded-lg border border-line bg-elev px-5 py-4 text-left">
+            {meta.why.map((p, i) => (
+              <p key={i} className="mt-2 text-[13px] leading-6 text-mute first:mt-0">
+                {p}
+              </p>
+            ))}
+          </div>
+        )}
+      </div>
+      )}
       <AnimatePresence mode="wait">
         <motion.div
           key={props.stage}
@@ -44,9 +72,11 @@ export function StageView(props: Props) {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -6 }}
           transition={{ duration: 0.22 }}
-          className="min-h-0 flex-1"
+          className="flex min-h-0 w-full flex-1 flex-col items-center"
         >
-          <StageBody {...props} />
+          <div className="w-full">
+            <StageBody {...props} />
+          </div>
         </motion.div>
       </AnimatePresence>
     </div>
@@ -55,6 +85,8 @@ export function StageView(props: Props) {
 
 function StageBody(props: Props) {
   switch (props.stage) {
+    case 'color':
+      return <ColorSlide embedded />
     case 'tokenize':
       return <TokenizeStage {...props} />
     case 'embed':
@@ -121,7 +153,7 @@ function Controls({
   const L = trace.layers.length
   const H = trace.layers[0]?.heads.length ?? 0
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-3">
+    <div className="mb-6 flex flex-wrap items-center justify-center gap-3">
       <div className="flex items-center gap-1">
         {Array.from({ length: L }, (_, i) => (
           <Chip key={i} on={layer === i} onClick={() => setLayer(i)}>
@@ -153,13 +185,31 @@ function TokenizeStage({ trace, token, setToken }: Props) {
   const [step, setStep] = useState(0)
   const steps = trace.tokenize.steps
   const cur = steps[Math.min(step, steps.length - 1)]
+  const t = trace.tokenize.tokens[token]
   return (
     <div className="grid gap-8 lg:grid-cols-[1fr_280px]">
       <div>
-        <TokenSource text={trace.tokenize.raw} tokens={trace.tokenize.tokens} active={token} />
+        <TokenSource text={trace.tokenize.raw} tokens={trace.tokenize.tokens} active={token} onPick={setToken} />
         <div className="mt-5">
           <TokenRow tokens={trace.tokenize.tokens} active={token} onPick={setToken} />
         </div>
+        <InspectPanel
+          title={t ? `token ${token}` : undefined}
+          value={t?.text}
+          facts={
+            t
+              ? [
+                  { k: 'id', v: String(t.id) },
+                  { k: 'index', v: String(token) },
+                  { k: 'span', v: t.special ? 'special' : `[${t.start}, ${t.end})` },
+                  { k: 'chars', v: t.special ? '—' : trace.tokenize.raw.slice(t.start, t.end) || t.text },
+                  { k: 'kind', v: t.special ? 'special' : 'subword' },
+                  { k: 'length', v: String(t.text.length) },
+                ]
+              : undefined
+          }
+          note="Tap a token in the sentence or the chip row. BPE merges common character pairs into longer pieces so the vocabulary stays small."
+        />
         <div className="mt-8">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[12px] text-mute">BPE merges on this sentence</span>
@@ -173,13 +223,18 @@ function TokenizeStage({ trace, token, setToken }: Props) {
             </div>
           </div>
           <div className="flex flex-wrap gap-1">
-            {cur?.tokens.map((t, i) => (
-              <span
-                key={`${t}-${i}`}
-                className="rounded border border-line bg-elev px-1.5 py-0.5 font-mono text-[12px] text-ink"
+            {cur?.tokens.map((piece, i) => (
+              <button
+                type="button"
+                key={`${piece}-${i}`}
+                onClick={() => {
+                  const idx = trace.tokenize.tokens.findIndex((tok) => tok.text === piece.trim())
+                  if (idx >= 0) setToken(idx)
+                }}
+                className="rounded border border-line bg-elev px-1.5 py-0.5 font-mono text-[12px] text-ink hover:border-gold/50"
               >
-                {t === ' ' ? '▁' : t}
-              </span>
+                {piece === ' ' ? '▁' : piece}
+              </button>
             ))}
           </div>
           {cur?.merge && (
@@ -216,6 +271,8 @@ function EmbedStage({ trace, token, setToken }: Props) {
         rows={trace.embeddings}
         labels={toks.map((t) => t.text)}
         dimLabels
+        name="embedding"
+        note="Each cell is one dimension of the token embedding. Color is signed magnitude — tap a cell for the exact number and the full row."
       />
       <p className="mt-6 max-w-2xl text-[12px] leading-5 text-mute">
         Nearby tokens in a trained model have related directions. This demo uses seeded vectors so the same token always maps to the same row — useful for watching the pipeline, not for semantics.
@@ -279,17 +336,36 @@ function QkvStage({ trace, layer, setLayer, token, setToken, head, setHead }: Pr
   return (
     <div>
       <Controls heads {...{ trace, token, head, layer, setToken, setHead, setLayer }} />
+      <div className="mb-6 grid gap-3 sm:grid-cols-3">
+        <Analogy title="Query" body="The search you type. “What am I looking for at this token?”" />
+        <Analogy title="Key" body="The page title in the results. “What does this token advertise?”" />
+        <Analogy title="Value" body="The page body you actually copy if the titles match." />
+      </div>
       <div className="grid gap-6 lg:grid-cols-3">
         {(['q', 'k', 'v'] as const).map((name) => (
           <div key={name}>
             <h3 className="mb-2 font-mono text-[12px] uppercase tracking-[0.16em] text-gold">{name}</h3>
-            <VectorStrip rows={h[name]} labels={toks.map((t) => t.text)} />
+            <VectorStrip
+              rows={h[name]}
+              labels={toks.map((t) => t.text)}
+              name={name.toUpperCase()}
+              note="Tap a cell. Q is “what I look for”, K is “what I contain”, V is “what I pass along”."
+            />
           </div>
         ))}
       </div>
-      <p className="mt-5 text-[12px] text-mute">
+      <p className="mt-5 text-center text-[12px] text-mute">
         Head {head} · dim {h.q[0]?.length}. In GQA, several Q heads share the same K/V slice — inspect GQA · MLA for the cache implication.
       </p>
+    </div>
+  )
+}
+
+function Analogy({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-lg border border-line bg-elev p-3 text-left">
+      <div className="font-mono text-[11px] text-gold">{title}</div>
+      <p className="mt-1 text-[12px] leading-5 text-mute">{body}</p>
     </div>
   )
 }
@@ -298,8 +374,11 @@ function ScoresStage({ trace, layer, setLayer, token, setToken, head, setHead }:
   const L = trace.layers[layer] ?? trace.layers[0]!
   const h = L.heads[head] ?? L.heads[0]!
   const toks = tokensForView(trace)
-  const [hov, setHov] = useState<{ r: number; c: number; v: number } | null>(null)
   const labels = toks.map((t) => t.text)
+  const dh = h.q[0]?.length ?? 1
+  const [cell, setCell] = useState({ r: token, c: Math.min(token, labels.length - 1) })
+  const q = h.q[cell.r] ?? h.q[token] ?? []
+  const k = h.k[cell.c] ?? h.k[token] ?? []
   return (
     <div>
       <Controls heads {...{ trace, token, head, layer, setToken, setHead, setLayer }} />
@@ -307,13 +386,36 @@ function ScoresStage({ trace, layer, setLayer, token, setToken, head, setHead }:
         matrix={h.scoresRaw}
         rowLabels={labels}
         colLabels={labels}
-        highlight={hov ? { r: hov.r, c: hov.c } : { r: token, c: token }}
-        onHover={(r, c, v) => setHov({ r, c, v })}
+        highlight={{ r: cell.r, c: cell.c }}
+        onPick={(r, c) => {
+          setToken(r)
+          setCell({ r, c })
+        }}
+        explain={(r, c, v) => {
+          const qq = h.q[r] ?? []
+          const kk = h.k[c] ?? []
+          const rawDot = qq.reduce((s, qi, d) => s + qi * (kk[d] ?? 0), 0)
+          return {
+            title: `${labels[r]} · ${labels[c]}`,
+            facts: [
+              { k: 'layer / head', v: `L${layer}  H${head}` },
+              { k: 'Q·K', v: fmt(rawDot, 5) },
+              { k: '√dₕ', v: fmt(Math.sqrt(dh), 4) },
+              { k: 'Q·K / √dₕ', v: fmt(v, 5) },
+              { k: 'query vec', v: qq.map((x) => fmt(x, 2)).join('  ') },
+              { k: 'key vec', v: kk.map((x) => fmt(x, 2)).join('  ') },
+            ],
+            note: 'This is compatibility before softmax. In a decoder, cells where j > i (the future) get −∞ next. Scroll to the neuron view to see which dimensions built this number.',
+          }
+        }}
       />
-      <div className="mt-3">
-        <HoverReadout
-          label="Q · K"
-          value={hov ? `${labels[hov.r]} → ${labels[hov.c]}  ${formatNum(hov.v, 3)}` : 'hover a cell'}
+      <div className="mt-8">
+        <NeuronContrib
+          q={q}
+          k={k}
+          scale={Math.sqrt(dh)}
+          queryLabel={labels[cell.r] ?? ''}
+          keyLabel={labels[cell.c] ?? ''}
         />
       </div>
     </div>
@@ -325,17 +427,37 @@ function MaskStage({ trace, layer, setLayer, token, setToken, head, setHead }: P
   const h = L.heads[head] ?? L.heads[0]!
   const toks = tokensForView(trace)
   const labels = toks.map((t) => t.text)
-  const vis = h.scoresMasked.map((row) => row.map((v) => (Number.isFinite(v) ? v : -3)))
   return (
     <div>
       <Controls heads {...{ trace, token, head, layer, setToken, setHead, setLayer }} />
-      <p className="mb-3 text-[12px] text-mute">
+      <p className="mb-3 text-center text-[12px] text-mute">
         Architecture <span className="text-gold">{trace.config.architecture}</span>
         {trace.config.architecture === 'decoder' && ' — causal: upper triangle is −∞ so softmax becomes 0.'}
         {trace.config.architecture === 'encoder' && ' — bidirectional: every token may look at every other token.'}
         {trace.config.architecture === 'encdec' && ' — decoder self-attn is causal; cross-attn (later) is full over the source.'}
       </p>
-      <Heatmap matrix={vis} rowLabels={labels} colLabels={labels} highlight={{ r: token, c: Math.min(token, labels.length - 1) }} />
+      <Heatmap
+        matrix={h.scoresMasked}
+        rowLabels={labels}
+        colLabels={labels}
+        highlight={{ r: token, c: Math.min(token, labels.length - 1) }}
+        onPick={(r) => setToken(r)}
+        explain={(r, c, v) => {
+          const legal = Number.isFinite(v)
+          return {
+            title: legal ? `${labels[r]} can see ${labels[c]}` : `${labels[r]} cannot see ${labels[c]}`,
+            facts: [
+              { k: 'raw score', v: fmt(h.scoresRaw[r]?.[c] ?? 0, 5) },
+              { k: 'after mask', v: legal ? fmt(v, 5) : '−∞' },
+              { k: 'allowed', v: legal ? 'yes' : 'no' },
+              { k: 'rule', v: r >= c ? 'past / self' : 'future' },
+            ],
+            note: legal
+              ? 'This cell stays a real number and will get probability mass in softmax.'
+              : 'Softmax(−∞) = 0, so no information flows from this key into the query.',
+          }
+        }}
+      />
     </div>
   )
 }
@@ -344,16 +466,31 @@ function SoftmaxStage({ trace, layer, setLayer, token, setToken, head, setHead }
   const L = trace.layers[layer] ?? trace.layers[0]!
   const h = L.heads[head] ?? L.heads[0]!
   const toks = tokensForView(trace)
-  const row = h.attn[token] ?? h.attn[0]!
+  const [attnT, setAttnT] = useState(1)
+  const masked = (h.scoresMasked[token] ?? []).map((v) => (Number.isFinite(v) ? v : -1e9))
+  const row = softmax(masked, attnT)
   const H = entropy(row)
   return (
     <div>
       <Controls heads {...{ trace, token, head, layer, setToken, setHead, setLayer }} />
       <TokenRow tokens={toks} active={token} onPick={setToken} />
-      <div className="mt-6">
-        <VectorBars values={row} labels={toks.map((t) => t.text)} />
+      <div className="mx-auto mt-4 max-w-sm">
+        <div className="mb-1 text-center text-[10px] uppercase tracking-[0.16em] text-faint">attention temperature</div>
+        <Slider value={attnT} min={0.2} max={2} step={0.1} onChange={setAttnT} />
+        <p className="mt-1 text-center text-[11px] text-mute">
+          Same trick as sampling: divide scores by T before softmax. Low T → one token. High T → blend.
+        </p>
       </div>
-      <div className="mt-6 grid max-w-xl gap-2 font-mono text-[12px] text-mute">
+      <div className="mt-6">
+        <VectorBars
+          values={row}
+          labels={toks.map((t) => t.text)}
+          asProb
+          name="α"
+          note="Softmax of the masked scores for this query. Bars sum to 1. Drag temperature to watch the mass move — Transformer Explainer’s live sampling idea, applied to attention."
+        />
+      </div>
+      <div className="mt-6 mx-auto grid max-w-xl gap-2 font-mono text-[12px] text-mute">
         <div>Σ p = {row.reduce((s, v) => s + v, 0).toFixed(3)} (must be 1)</div>
         <div>entropy = {H.toFixed(3)} bits · {H < 1 ? 'peaky' : H > 2 ? 'diffuse' : 'mixed'}</div>
       </div>
@@ -364,7 +501,16 @@ function SoftmaxStage({ trace, layer, setLayer, token, setToken, head, setHead }
           colLabels={toks.map((t) => t.text)}
           mode="prob"
           highlight={{ r: token, c: row.indexOf(Math.max(...row)) }}
-          cell={20}
+          onPick={(r) => setToken(r)}
+          explain={(r, c, v) => ({
+            title: `P(${toks[c]?.text} | query ${toks[r]?.text})`,
+            facts: [
+              { k: 'αᵢⱼ', v: fmt(v, 5) },
+              { k: 'percent', v: `${(v * 100).toFixed(2)}%` },
+              { k: 'score before', v: fmt(h.scoresMasked[r]?.[c] ?? 0, 4) },
+            ],
+            note: 'Rows are queries, columns are keys. Each row is a probability distribution. The slider above only reshapes the bar chart for the selected query.',
+          })}
         />
       </div>
     </div>
@@ -378,7 +524,13 @@ function AttendStage({ trace, layer, setLayer, token, setToken, head, setHead }:
   return (
     <div>
       <Controls heads {...{ trace, token, head, layer, setToken, setHead, setLayer }} />
-      <AttentionArcs tokens={toks} weights={h.attn[token] ?? []} query={token} />
+      <p className="mb-3 text-center text-[12px] text-mute">
+        BertViz head view: queries on the left, keys on the right. Thickness is attention mass.
+      </p>
+      <Bipartite tokens={toks} weights={h.attn[token] ?? []} query={token} />
+      <div className="mt-8">
+        <AttentionArcs tokens={toks} weights={h.attn[token] ?? []} query={token} />
+      </div>
       <div className="mt-8 grid gap-6 lg:grid-cols-2">
         <div>
           <h3 className="mb-2 text-[12px] uppercase tracking-[0.16em] text-faint">Values</h3>
@@ -399,16 +551,59 @@ function HeadsStage({ trace, layer, setLayer, token, setToken, head, setHead }: 
   return (
     <div>
       <Controls heads {...{ trace, token, head, layer, setToken, setHead, setLayer }} />
-      <div className="grid gap-4 sm:grid-cols-2">
-        {L.heads.map((h, i) => (
-          <button key={i} type="button" onClick={() => setHead(i)} className="rounded-lg border border-line bg-elev p-3 text-left">
-            <div className="mb-2 font-mono text-[11px] text-mute">head {i}{i === head ? ' · selected' : ''}</div>
-            <Heatmap matrix={h.attn} mode="prob" cell={12} />
-          </button>
-        ))}
+      <h3 className="mb-2 text-center text-[12px] uppercase tracking-[0.16em] text-faint">
+        Model view · layers × heads
+      </h3>
+      <p className="mb-4 text-center text-[12px] text-mute">
+        BertViz’s bird’s-eye: every head of every layer. Click a thumbnail. Labels are rough pattern guesses.
+      </p>
+      <div className="mb-8 overflow-x-auto">
+        <div className="inline-flex min-w-full flex-col items-center gap-3">
+          {trace.layers.map((layerTrace, li) => (
+            <div key={li} className="flex items-start gap-3">
+              <div className="w-8 pt-6 font-mono text-[11px] text-faint">L{li}</div>
+              <div className="flex flex-wrap gap-3">
+                {layerTrace.heads.map((hd, hi) => {
+                  const pat = classifyAttention(hd.attn)
+                  const on = layer === li && head === hi
+                  return (
+                    <button
+                      type="button"
+                      key={hi}
+                      title={patternHint(pat)}
+                      onClick={() => {
+                        setLayer(li)
+                        setHead(hi)
+                      }}
+                      className={`rounded-md border p-2 ${on ? 'border-gold bg-gold/10' : 'border-line bg-elev'}`}
+                    >
+                      <div className="mb-1 font-mono text-[10px] text-mute">H{hi}</div>
+                      <Heatmap matrix={hd.attn} mode="prob" cell={11} inspect={false} />
+                      <div className="mt-1 font-mono text-[10px] text-gold">{patternLabel(pat)}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="mb-4 text-center text-[12px] text-mute">{patternHint(classifyAttention(L.heads[head]!.attn))}</p>
+      <div className="mt-6">
+        <h3 className="mb-2 text-center text-[12px] uppercase tracking-[0.16em] text-faint">head {head} in detail</h3>
+        <Heatmap
+          matrix={L.heads[head]!.attn}
+          mode="prob"
+          rowLabels={toks.map((t) => t.text)}
+          colLabels={toks.map((t) => t.text)}
+          highlight={{ r: token, c: 0 }}
+          onPick={(r) => setToken(r)}
+        />
       </div>
       <div className="mt-6">
-        <h3 className="mb-2 text-[12px] uppercase tracking-[0.16em] text-faint">Concat + W_O</h3>
+        <h3 className="mb-2 text-center text-[12px] uppercase tracking-[0.16em] text-faint">
+          Concat + <Tex expr="W_O" />
+        </h3>
         <VectorStrip rows={L.attnProj} labels={toks.map((t) => t.text)} />
       </div>
     </div>
@@ -516,7 +711,7 @@ function UnembedStage({ trace, token, setToken }: Props) {
       <p className="mt-4 mb-3 text-[12px] text-mute">
         Last-token hidden state is projected to a tiny demo vocabulary. Production models use 32k–200k+ tokens; the linear map is |V| × d.
       </p>
-      <VectorStrip rows={[trace.finalNorm[token] ?? []]} labels={['h_last']} dimLabels />
+      <VectorStrip rows={[trace.finalNorm[token] ?? []]} labels={['h last']} dimLabels name="h last" />
       <div className="mt-8">
         <h3 className="mb-3 text-[12px] uppercase tracking-[0.16em] text-faint">Raw logits</h3>
         <VectorBars values={trace.rawLogits} labels={trace.vocab} />
@@ -526,9 +721,22 @@ function UnembedStage({ trace, token, setToken }: Props) {
 }
 
 function SamplingStage({ trace }: Props) {
+  const [sel, setSel] = useState(0)
+  const [story, setStory] = useState<GenStep[] | null>(null)
+  const [shown, setShown] = useState(0)
   const cands = [...trace.sampled.candidates].sort((a, b) => b.logit - a.logit)
   const live = cands.filter((c) => !c.filtered)
   const H = entropy(trace.sampled.candidates.map((c) => c.prob))
+  const c = cands[sel] ?? cands[0]
+  const temps = [0.3, trace.config.temperature, 1.5]
+  const uniqueT = [...new Set(temps.map((t) => Number(t.toFixed(2))))]
+
+  const runGen = () => {
+    const steps = generateSteps(trace.sourceText, trace.targetText, trace.config, 8)
+    setStory(steps)
+    setShown(1)
+  }
+
   return (
     <div className="grid gap-8 lg:grid-cols-[1fr_240px]">
       <div>
@@ -539,25 +747,110 @@ function SamplingStage({ trace }: Props) {
           {' · '}top-p={trace.config.topP}
           {' · '}min-p={trace.config.minP}
         </p>
+        <div className="mb-6 flex flex-wrap justify-center gap-2">
+          <button
+            type="button"
+            onClick={runGen}
+            className="rounded-md border border-gold/40 bg-gold/10 px-3 py-1.5 font-mono text-[11px] text-gold"
+          >
+            generate continuation
+          </button>
+          {story && shown < story.length && (
+            <button
+              type="button"
+              onClick={() => setShown((s) => Math.min(story.length, s + 1))}
+              className="rounded-md border border-line px-3 py-1.5 font-mono text-[11px] text-mute"
+            >
+              next token
+            </button>
+          )}
+        </div>
+        {story && (
+          <div className="mb-6 rounded-lg border border-line bg-elev p-4">
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-faint">autoregressive loop</div>
+            <p className="font-mono text-[14px] leading-7 text-ink">
+              {story[0]?.prompt}
+              {story.slice(0, shown).map((st, i) => (
+                <span key={i} className="text-gold">
+                  {' '}
+                  {st.picked}
+                </span>
+              ))}
+            </p>
+            <p className="mt-2 text-[12px] text-mute">
+              Each gold word was sampled, then fed back as input — Bycroft / Explainer’s “predict, append, repeat.”
+            </p>
+          </div>
+        )}
+        <h3 className="mb-3 text-[12px] uppercase tracking-[0.16em] text-faint">Temperature compare</h3>
+        <div className="mb-6 grid gap-3 sm:grid-cols-3">
+          {uniqueT.map((T) => {
+            const p = softmax(trace.rawLogits, T)
+            const ranked = p
+              .map((prob, i) => ({ prob, tok: trace.vocab[i]! }))
+              .sort((a, b) => b.prob - a.prob)
+              .slice(0, 5)
+            return (
+              <div key={T} className="rounded-md border border-line bg-elev p-3">
+                <div className="mb-2 font-mono text-[11px] text-gold">T = {T}</div>
+                {ranked.map((r) => (
+                  <div key={r.tok} className="flex items-center gap-2 py-0.5">
+                    <span className="w-14 truncate font-mono text-[11px] text-ink">{r.tok}</span>
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-soft">
+                      <div className="h-full bg-gold" style={{ width: `${r.prob * 100}%` }} />
+                    </div>
+                    <span className="w-10 text-right font-mono text-[10px] text-mute">{(r.prob * 100).toFixed(0)}%</span>
+                  </div>
+                ))}
+              </div>
+            )
+          })}
+        </div>
         <div className="space-y-2">
-          {cands.map((c) => (
-            <div key={c.token} className="grid grid-cols-[88px_1fr_52px] items-center gap-2">
-              <span className={`font-mono text-[12px] ${c.filtered ? 'text-faint line-through' : 'text-ink'}`}>
-                {c.token}
-                {c.token === trace.sampled.picked ? ' ←' : ''}
+          {cands.map((cand, i) => (
+            <button
+              type="button"
+              key={cand.token}
+              onClick={() => setSel(i)}
+              className={`grid w-full grid-cols-[88px_1fr_52px] items-center gap-2 rounded-md px-1 py-1 text-left ${
+                sel === i ? 'bg-soft ring-1 ring-gold/40' : ''
+              }`}
+            >
+              <span className={`font-mono text-[12px] ${cand.filtered ? 'text-faint line-through' : 'text-ink'}`}>
+                {cand.token}
+                {cand.token === trace.sampled.picked ? ' ←' : ''}
               </span>
               <div className="h-2 overflow-hidden rounded-sm bg-soft">
                 <motion.div
                   className="h-full rounded-sm"
                   initial={{ width: 0 }}
-                  animate={{ width: `${c.prob * 100}%` }}
-                  style={{ background: c.filtered ? '#3a3b42' : sequential(c.prob, 1) }}
+                  animate={{ width: `${cand.prob * 100}%` }}
+                  style={{ background: cand.filtered ? '#3a3b42' : sequential(cand.prob, 1) }}
                 />
               </div>
-              <span className="text-right font-mono text-[11px] text-mute">{(c.prob * 100).toFixed(1)}%</span>
-            </div>
+              <span className="text-right font-mono text-[11px] text-mute">{(cand.prob * 100).toFixed(1)}%</span>
+            </button>
           ))}
         </div>
+        {c && (
+          <InspectPanel
+            title={`candidate “${c.token}”`}
+            value={`${(c.prob * 100).toFixed(2)}%`}
+            facts={[
+              { k: 'logit', v: fmt(c.logit, 4) },
+              { k: 'logit / T', v: fmt(c.logit / Math.max(trace.config.temperature, 1e-8), 4) },
+              { k: 'kept', v: c.filtered ? 'no — filtered out' : 'yes' },
+              { k: 'drawn', v: c.token === trace.sampled.picked ? 'yes' : 'no' },
+              { k: 'rank', v: String(sel + 1) },
+              { k: 'entropy', v: `${H.toFixed(3)} bits` },
+            ]}
+            note={
+              c.filtered
+                ? 'This token was zeroed by top-k / top-p / min-p / greedy, then the rest was renormalized.'
+                : 'After filters, softmax(logit / T) over the kept set. The model samples from these bars.'
+            }
+          />
+        )}
         <p className="mt-5 font-mono text-[12px] text-gold">
           drew “{trace.sampled.picked}” · {live.length} tokens kept · entropy {H.toFixed(2)} bits
         </p>
@@ -581,10 +874,13 @@ function KvStage({ trace, head, setHead, token, setToken, layer, setLayer }: Pro
   const { prefillK, decodeQ, decodeScores } = trace.kv
   const toks = tokensForView(trace)
   const seq = prefillK[0]?.length ?? 0
+  const [sel, setSel] = useState(0)
+  const w = decodeScores[head]?.[sel] ?? 0
+  const kvec = prefillK[head]?.[sel]
   return (
     <div>
       <Controls heads {...{ trace, token, head, layer, setToken, setHead, setLayer }} />
-      <div className="mb-4 flex gap-6 text-[12px] text-mute">
+      <div className="mb-4 flex justify-center gap-6 text-[12px] text-mute">
         <span>
           <i className="mr-2 inline-block h-2 w-2 rounded-full bg-gold not-italic" />
           prefill: write K,V for all {seq} tokens
@@ -594,32 +890,42 @@ function KvStage({ trace, head, setHead, token, setToken, layer, setLayer }: Pro
           decode: one new Q, attend over cache
         </span>
       </div>
-      <div className="overflow-x-auto">
+      <div className="flex justify-center overflow-x-auto">
         <div className="flex gap-1">
           {Array.from({ length: seq }, (_, t) => (
-            <motion.div
+            <motion.button
+              type="button"
               key={t}
+              onClick={() => {
+                setSel(t)
+                setToken(t)
+              }}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: t * 0.06 }}
-              className="w-14 rounded-md border border-line bg-elev p-2"
+              className={`w-16 rounded-md border p-2 ${sel === t ? 'border-gold bg-gold/10' : 'border-line bg-elev'}`}
             >
               <div className="mb-1 truncate font-mono text-[10px] text-mute">{toks[t]?.text}</div>
               <div className="h-10 rounded-sm" style={{ background: sequential(decodeScores[head]?.[t] ?? 0, 1) }} />
-            </motion.div>
+              <div className="mt-1 font-mono text-[10px] text-faint">{((decodeScores[head]?.[t] ?? 0) * 100).toFixed(0)}%</div>
+            </motion.button>
           ))}
-          <motion.div
-            initial={{ opacity: 0, x: 12 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="w-14 rounded-md border border-gold/40 bg-gold/10 p-2"
-          >
-            <div className="mb-1 font-mono text-[10px] text-gold">new</div>
-            <div className="h-10 rounded-sm bg-gold/40" />
-          </motion.div>
         </div>
       </div>
+      <InspectPanel
+        title={`cached slot ${sel} · ${toks[sel]?.text ?? ''}`}
+        value={`${(w * 100).toFixed(2)}%`}
+        facts={[
+          { k: 'token', v: toks[sel]?.text ?? String(sel) },
+          { k: 'position', v: String(sel) },
+          { k: 'decode α', v: fmt(w, 5) },
+          { k: 'K vector', v: (kvec ?? []).map((x) => fmt(x, 2)).join('  ') },
+          { k: 'head', v: String(head) },
+        ]}
+        note="During decode, this K (and V) is reused. Only the new token computes a fresh Q, K, V; history is read from cache."
+      />
       <p className="mt-5 max-w-2xl text-[12px] leading-5 text-mute">
-        Cache size ≈ layers × kv_heads × seq × d_head × 2 (K and V) × bytes. That is why GQA, MLA, sliding windows, and quantization exist. Decode is usually memory-bound: the GPU spends its time reading this cache, not multiplying.
+        Cache size ≈ layers × KV heads × sequence × dₕ × 2 (K and V) × bytes. That is why GQA, MLA, sliding windows, and quantization exist. Decode is usually memory-bound: the GPU spends its time reading this cache, not multiplying.
       </p>
       {decodeQ[head] && (
         <div className="mt-6">
@@ -749,33 +1055,49 @@ function GqaStage({ cfg }: { cfg: ModelConfig }) {
 function MoeStage({ trace, token }: Props) {
   const moe = trace.layers.at(-1)?.moe
   const row = moe?.router[token] ?? moe?.router[0] ?? []
+  const [sel, setSel] = useState(0)
+  const p = row[sel] ?? 0
+  const chosen = moe?.chosen[token]?.experts ?? []
   return (
     <div>
-      <p className="mb-4 text-[13px] text-mute">
+      <p className="mb-4 text-center text-[13px] text-mute">
         Router softmax over 8 toy experts for token “{tokensForView(trace)[token]?.text}”. Real DeepSeekMoE uses many fine-grained experts plus shared ones; Llama 4 uses fewer large experts and sometimes alternates dense/MoE layers.
       </p>
-      <div className="grid grid-cols-4 gap-2 max-w-xl">
-        {row.map((p, i) => (
-          <motion.div
+      <div className="mx-auto grid max-w-xl grid-cols-4 gap-2">
+        {row.map((prob, i) => (
+          <motion.button
+            type="button"
             key={i}
+            onClick={() => setSel(i)}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
-            className="rounded-md border border-line bg-elev p-3"
+            className={`rounded-md border p-3 ${sel === i ? 'border-gold bg-gold/10' : 'border-line bg-elev'}`}
           >
             <div className="font-mono text-[11px] text-mute">E{i}</div>
             <div className="mt-2 h-16 overflow-hidden rounded-sm bg-soft">
               <motion.div
                 className="w-full bg-gold"
                 initial={{ height: 0 }}
-                animate={{ height: `${p * 100}%` }}
-                style={{ marginTop: `${(1 - p) * 100}%` }}
+                animate={{ height: `${prob * 100}%` }}
+                style={{ marginTop: `${(1 - prob) * 100}%` }}
               />
             </div>
-            <div className="mt-1 font-mono text-[11px] text-ink">{(p * 100).toFixed(0)}%</div>
-          </motion.div>
+            <div className="mt-1 font-mono text-[11px] text-ink">{(prob * 100).toFixed(0)}%</div>
+          </motion.button>
         ))}
       </div>
+      <InspectPanel
+        title={`expert ${sel}`}
+        value={`${(p * 100).toFixed(2)}%`}
+        facts={[
+          { k: 'gate', v: fmt(p, 5) },
+          { k: 'active', v: chosen.includes(sel) ? 'top-k selected' : 'skipped this token' },
+          { k: 'token', v: tokensForView(trace)[token]?.text ?? String(token) },
+          { k: 'chosen set', v: chosen.map((e) => `E${e}`).join(', ') },
+        ]}
+        note="Only the selected experts run their FFN. The others cost no compute for this token — that is the sparsity."
+      />
     </div>
   )
 }
@@ -783,16 +1105,27 @@ function MoeStage({ trace, token }: Props) {
 function SpecStage() {
   const draft = ['the', 'cat', 'sat', 'on']
   const verdict = ['ok', 'ok', 'ok', 'no']
+  const why = [
+    'Draft and target both wanted “the”. Accept.',
+    'Draft and target both wanted “cat”. Accept.',
+    'Draft and target both wanted “sat”. Accept.',
+    'Draft proposed “on”; target disagrees. Reject and resample from the large model.',
+  ]
+  const [sel, setSel] = useState(0)
   return (
     <div>
-      <div className="mb-6 flex flex-wrap gap-3">
+      <div className="mb-6 flex flex-wrap justify-center gap-3">
         {draft.map((t, i) => (
-          <motion.div
+          <motion.button
+            type="button"
             key={t}
+            onClick={() => setSel(i)}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.18 }}
             className={`rounded-md border px-3 py-2 font-mono text-[13px] ${
+              sel === i ? 'ring-1 ring-gold/50' : ''
+            } ${
               verdict[i] === 'ok' ? 'border-teal/40 bg-teal/10 text-ink' : 'border-coral/40 bg-coral/10 text-coral'
             }`}
           >
@@ -800,10 +1133,21 @@ function SpecStage() {
             <div className="mt-1 text-[10px] uppercase tracking-wider text-faint">
               {verdict[i] === 'ok' ? 'accept' : 'reject · resample'}
             </div>
-          </motion.div>
+          </motion.button>
         ))}
       </div>
-      <ol className="max-w-2xl space-y-2 text-[13px] leading-6 text-mute">
+      <InspectPanel
+        title={`draft token ${sel + 1} · “${draft[sel]}”`}
+        value={verdict[sel] === 'ok' ? 'accept' : 'reject'}
+        facts={[
+          { k: 'role', v: 'draft proposal' },
+          { k: 'index', v: String(sel) },
+          { k: 'verdict', v: verdict[sel] === 'ok' ? 'matches target' : 'mismatch' },
+          { k: 'next step', v: verdict[sel] === 'ok' ? 'keep and check the rest' : 'resample from target logits' },
+        ]}
+        note={why[sel]}
+      />
+      <ol className="mx-auto mt-6 max-w-2xl space-y-2 text-[13px] leading-6 text-mute">
         <li>1. A small draft model proposes k tokens serially (cheap).</li>
         <li>2. The large model scores those k+1 positions in one forward pass (parallel, uses the unused compute of decode).</li>
         <li>3. Accept the longest matching prefix. On the first mismatch, resample from the large model’s distribution.</li>

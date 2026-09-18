@@ -1,5 +1,5 @@
 import { motion } from 'motion/react'
-import { TOKEN_COLORS } from './color'
+import { tokenColor } from './color'
 import type { Token } from '../engine/types'
 import clsx from 'clsx'
 
@@ -13,7 +13,7 @@ export function TokenRow({
   onPick?: (i: number) => void
 }) {
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap justify-center gap-1.5">
       {tokens.map((t, i) => (
         <motion.button
           key={`${t.id}-${i}`}
@@ -28,7 +28,7 @@ export function TokenRow({
             !t.special && 'text-ink',
             active === i ? 'border-gold bg-gold/10' : 'border-line bg-elev hover:border-gold/40',
           )}
-          style={!t.special ? { boxShadow: `inset 3px 0 0 ${TOKEN_COLORS[i % TOKEN_COLORS.length]}` } : undefined}
+          style={!t.special ? { boxShadow: `inset 3px 0 0 ${tokenColor(i)}` } : undefined}
         >
           {t.text}
         </motion.button>
@@ -37,21 +37,34 @@ export function TokenRow({
   )
 }
 
-export function TokenSource({ text, tokens, active }: { text: string; tokens: Token[]; active?: number }) {
+export function TokenSource({
+  text,
+  tokens,
+  active,
+  onPick,
+}: {
+  text: string
+  tokens: Token[]
+  active?: number
+  onPick?: (i: number) => void
+}) {
   return (
-    <p className="font-mono text-[13px] leading-7 text-ink">
+    <p className="text-center font-mono text-[15px] leading-8 text-ink">
       {tokens
         .filter((t) => !t.special)
         .map((t, i) => {
           const real = tokens.indexOf(t)
           const on = active === real
           return (
-            <span
+            <button
+              type="button"
               key={`${t.start}-${i}`}
+              onClick={() => onPick?.(real)}
               className={clsx('rounded-sm px-0.5', on && 'bg-gold/20 text-gold')}
+              style={{ boxShadow: `inset 0 -2px 0 ${tokenColor(real)}` }}
             >
               {text.slice(t.start, t.end)}
-            </span>
+            </button>
           )
         })}
     </p>

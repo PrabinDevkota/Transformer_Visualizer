@@ -11,12 +11,14 @@
   },
   "dependencies": {
     "clsx": "^2.1.1",
+    "katex": "^0.18.7",
     "motion": "^13.4.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@types/katex": "^0.16.8",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
