@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --color-bg: #080809;
+  --color-elev: #101114;
+  --color-soft: #16171c;
+  --color-line: #26272e;
+  --color-ink: #eceae4;
+  --color-mute: #8b8a84;
+  --color-faint: #5c5b57;
+  --color-gold: #d4b483;
+  --color-teal: #7aa8a0;
+  --color-coral: #c97a63;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: #080809;
+  color: #eceae4;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  letter-spacing: -0.011em;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: #d4b483;
+  color: #080809;
+}
+
+input[type="range"] {
+  appearance: none;
+  height: 2px;
+  background: #26272e;
+  border-radius: 99px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 99px;
+  background: #d4b483;
+  cursor: pointer;
+}
+
+select,
+button,
+input {
+  font-family: inherit;
+}
+
+select option {
+  background: #101114;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2c2d34;
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
