@@ -1,4 +1,7 @@
-import { runModel } from './transformer'
+import { hashString, mulberry32 } from './rng'
+import { applySampling } from './sampling'
+import { tokenize } from './tokenizer'
+import { demoVocab, toyLogits } from './toyLm'
 import type { ModelConfig, SampleCandidate } from './types'
 
 export function appendToken(text: string, tok: string): string {
@@ -13,18 +16,32 @@ export interface GenStep {
   candidates: SampleCandidate[]
 }
 
+/** Toy next-token loop. Does not rerun the transformer — sampling reads the n-gram table. */
 export function generateSteps(seed: string, target: string, cfg: ModelConfig, n = 8): GenStep[] {
   const out: GenStep[] = []
   let prompt = seed.trim() || 'The'
   for (let i = 0; i < n; i++) {
-    const trace = runModel(prompt, target, { ...cfg, seed: cfg.seed + i * 17 })
+    const tok = tokenize(prompt, cfg.showBos)
+    const vocab = demoVocab(tok.tokens)
+    const logits = toyLogits(tok.tokens, vocab)
+    const sampleRand = mulberry32(cfg.seed + i * 17 + hashString(prompt + '|' + target))
+    const sampled = applySampling(
+      logits,
+      vocab,
+      cfg.sampling,
+      cfg.temperature,
+      cfg.topK,
+      cfg.topP,
+      cfg.minP,
+      sampleRand,
+    )
     out.push({
       prompt,
-      picked: trace.sampled.picked,
-      candidates: trace.sampled.candidates,
+      picked: sampled.picked,
+      candidates: sampled.candidates,
     })
-    if (trace.sampled.picked === '.' || trace.sampled.picked === '!') break
-    prompt = appendToken(prompt, trace.sampled.picked)
+    if (sampled.picked === '.' || sampled.picked === '!') break
+    prompt = appendToken(prompt, sampled.picked)
   }
   return out
 }
