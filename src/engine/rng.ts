@@ -26,11 +26,17 @@ export function gaussian(rand: () => number): number {
 
 export function randomMatrix(rows: number, cols: number, rand: () => number, scale = 0.35): number[][] {
   const s = scale / Math.sqrt(cols)
-  return Array.from({ length: rows }, () =>
-    Array.from({ length: cols }, () => gaussian(rand) * s),
-  )
+  const m = new Array<number[]>(rows)
+  for (let i = 0; i < rows; i++) {
+    const row = new Array<number>(cols)
+    for (let j = 0; j < cols; j++) row[j] = gaussian(rand) * s
+    m[i] = row
+  }
+  return m
 }
 
 export function randomVec(n: number, rand: () => number, scale = 0.2): number[] {
-  return Array.from({ length: n }, () => gaussian(rand) * scale)
+  const out = new Array<number>(n)
+  for (let i = 0; i < n; i++) out[i] = gaussian(rand) * scale
+  return out
 }
