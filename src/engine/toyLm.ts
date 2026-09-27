@@ -27,29 +27,42 @@ const BIGRAM: Record<string, Record<string, number>> = {
   residual: { stream: 2.8, connection: 2.2, add: 1.8 },
 }
 
-const FALLBACK = [
+const FALLBACK = new Set([
   'the', 'a', 'to', 'of', 'and', 'is', 'in', 'that',
   'attention', 'token', 'layer', 'head', 'next',
   '.', ',', '!',
-]
+])
+
+function lastContent(tokens: Token[]): string {
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const t = tokens[i]!
+    if (!t.special) return t.text.toLowerCase()
+  }
+  return ''
+}
 
 export function toyLogits(tokens: Token[], vocab: string[]): number[] {
-  const last = [...tokens].reverse().find((t) => !t.special)?.text.toLowerCase() ?? ''
-  const table = BIGRAM[last] ?? {}
-  return vocab.map((w) => {
-    const key = w.toLowerCase()
-    const bi = table[key] ?? 0
+  const last = lastContent(tokens)
+  const table = BIGRAM[last]
+  const n = vocab.length
+  const out = new Array<number>(n)
+  for (let i = 0; i < n; i++) {
+    const key = vocab[i]!.toLowerCase()
+    const bi = table?.[key] ?? 0
     const uni = UNIGRAM[key] ?? 0.15
-    const fallback = FALLBACK.includes(key) ? 0.25 : 0
-    return bi + uni + fallback
-  })
+    const fallback = FALLBACK.has(key) ? 0.25 : 0
+    out[i] = bi + uni + fallback
+  }
+  return out
 }
 
 export function demoVocab(tokens: Token[]): string[] {
-  const last = [...tokens].reverse().find((t) => !t.special)?.text.toLowerCase() ?? ''
-  const fromBigram = Object.keys(BIGRAM[last] ?? {})
-  const base = [
-    ...fromBigram,
+  const last = lastContent(tokens)
+  const fromBigram = BIGRAM[last]
+  const base = fromBigram
+    ? Object.keys(fromBigram)
+    : []
+  const extras = [
     'the', 'a', 'cat', 'sat', 'on', 'mat',
     'attention', 'is', 'all', 'you', 'need',
     'transformer', 'layer', 'model', 'token', 'head',
@@ -57,11 +70,19 @@ export function demoVocab(tokens: Token[]): string[] {
   ]
   const seen = new Set<string>()
   const out: string[] = []
-  for (const w of base) {
+  for (let i = 0; i < base.length; i++) {
+    const w = base[i]!
     if (!seen.has(w)) {
       seen.add(w)
       out.push(w)
     }
   }
-  return out.slice(0, 16)
+  for (let i = 0; i < extras.length && out.length < 16; i++) {
+    const w = extras[i]!
+    if (!seen.has(w)) {
+      seen.add(w)
+      out.push(w)
+    }
+  }
+  return out
 }
