@@ -2,22 +2,29 @@ import { entropy } from './math'
 
 export type AttnPattern = 'diagonal' | 'previous' | 'bos' | 'uniform' | 'mixed'
 
+function rowArgmax(row: number[]): number {
+  let i = 0
+  const n = row.length
+  for (let k = 1; k < n; k++) if (row[k]! > row[i]!) i = k
+  return i
+}
+
 export function classifyAttention(attn: number[][]): AttnPattern {
-  if (!attn.length) return 'mixed'
   const n = attn.length
+  if (n === 0) return 'mixed'
   let diag = 0
   let prev = 0
   let bos = 0
-  const ents: number[] = []
+  let entSum = 0
   for (let i = 0; i < n; i++) {
     const row = attn[i]!
-    const m = row.indexOf(Math.max(...row))
+    const m = rowArgmax(row)
     if (m === i) diag++
-    if (m === Math.max(0, i - 1) && i > 0) prev++
+    if (i > 0 && m === i - 1) prev++
     if (m === 0) bos++
-    ents.push(entropy(row))
+    entSum += entropy(row)
   }
-  const meanH = ents.reduce((s, v) => s + v, 0) / n
+  const meanH = entSum / n
   if (meanH > Math.log2(Math.max(n, 2)) * 0.72) return 'uniform'
   if (diag / n >= 0.55) return 'diagonal'
   if (prev / Math.max(n - 1, 1) >= 0.55) return 'previous'
