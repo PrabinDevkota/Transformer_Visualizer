@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { STAGES, type StageId } from './content/stages'
 import { DEFAULT_CONFIG, type ModelConfig } from './engine/types'
-import { runModel, tokensForView } from './engine/transformer'
+import { attachSampling, runForward, tokensForView } from './engine/transformer'
 import { Field, Select, Slider } from './components/Fields'
 import { StageNav } from './components/StageNav'
 import { Pipeline } from './viz/Pipeline'
@@ -52,7 +52,28 @@ export default function App() {
     window.history.replaceState(null, '', `${window.location.pathname}?${p.toString()}`)
   }, [text, cfg.architecture, cfg.temperature])
 
-  const trace = useMemo(() => runModel(text, target, cfg), [text, target, cfg])
+  const forward = useMemo(
+    () => runForward(text, target, cfg),
+    [
+      text,
+      target,
+      cfg.architecture,
+      cfg.positional,
+      cfg.attention,
+      cfg.norm,
+      cfg.ffn,
+      cfg.nLayers,
+      cfg.nHeads,
+      cfg.nKvHeads,
+      cfg.dModel,
+      cfg.seed,
+      cfg.showBos,
+    ],
+  )
+  const trace = useMemo(
+    () => attachSampling(forward, cfg, text, target),
+    [forward, cfg, text, target],
+  )
   const toks = tokensForView(trace)
   const stageIndex = STAGES.findIndex((s) => s.id === stage)
 
