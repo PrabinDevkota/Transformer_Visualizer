@@ -4,10 +4,32 @@ import { STAGES, type StageId } from '../content/stages'
 export function StageNav({
   current,
   onPick,
+  horizontal,
 }: {
   current: StageId
   onPick: (id: StageId) => void
+  horizontal?: boolean
 }) {
+  if (horizontal) {
+    return (
+      <nav className="flex gap-1 overflow-x-auto px-3 py-2">
+        {STAGES.map((s) => (
+          <button
+            type="button"
+            key={s.id}
+            onClick={() => onPick(s.id)}
+            className={clsx(
+              'shrink-0 rounded-md px-2 py-1 font-mono text-[11px]',
+              current === s.id ? 'bg-soft text-ink' : 'text-mute hover:text-ink',
+            )}
+          >
+            {s.n} {s.title}
+          </button>
+        ))}
+      </nav>
+    )
+  }
+
   let lastGroup = ''
   return (
     <nav className="flex h-full flex-col gap-0.5 overflow-y-auto pr-1">
