@@ -131,6 +131,7 @@ export const STAGES: StageMeta[] = [
       'A decoder that writes the next token must not peek at it. Causal masking zeros the upper triangle: query i may only see keys j ≤ i. Without that, training would cheat and generation would not match training.',
       'Encoders (BERT) want the opposite: every token may look at every other, because the job is a bidirectional representation, not left-to-right generation. Encoder–decoder models mix both: the encoder is full, the decoder is causal, and cross-attention lets decoder queries read all encoder keys.',
       'Why −∞ instead of multiplying by zero? Softmax(−∞) = 0 automatically, and the remaining legal scores still sum to 1. A hard multiply-by-zero after softmax would break the distribution.',
+      'Sliding windows (Mistral) also mask keys farther than W steps back, so cache and compute stay linear in context. Position 0 is left unmasked as an attention sink — a place leftover mass can go without polluting recent tokens. Turn Window on in the top bar and the extra −∞ band appears immediately.',
     ],
     formula: String.raw`S_{ij} \leftarrow -\infty \quad \text{if } j \text{ is illegal}`,
   },
@@ -271,7 +272,7 @@ export const STAGES: StageMeta[] = [
     blurb: 'Share or compress KV so the cache is not one head per query.',
     why: [
       'Multi-head attention gives every query head its own K and V. Quality is fine; the cache is fat. During decode that fat cache is the bottleneck, not the matmuls.',
-      'MQA: one KV head for all queries. Tiny cache, sometimes too little key diversity. GQA: groups of queries share a KV head — the current default (Llama 2/3, Mistral, Qwen). MLA (DeepSeek): store a low-rank latent instead of full KV, then up-project. Different engineering, same motive: shrink bytes moved per generated token.',
+      'MQA: one KV head for all queries. Tiny cache, sometimes too little key diversity. GQA: groups of queries share a KV head — the current default (Llama 2/3, Mistral, Qwen). MLA (DeepSeek): store a low-rank latent c instead of full KV, then up-project at attention time. This visualizer actually compresses to d_c = d/4 when you pick MLA — the KV-cache page shows c, not K.',
       'Why not just fewer query heads? Queries are cheap at decode (one new token). Keys/values are expensive (the whole past). Cut the expensive side first.',
     ],
   },
