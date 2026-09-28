@@ -89,6 +89,10 @@ function projectRows(rows: number[][], weight: number[][]): number[][] {
   return out
 }
 
+function mlaRank(dModel: number) {
+  return Math.max(2, Math.floor(dModel / 4))
+}
+
 function maskScore(
   raw: number,
   qi: number,
@@ -96,16 +100,25 @@ function maskScore(
   architecture: ModelConfig['architecture'],
   kind: 'self' | 'cross',
   srcLen: number,
+  window: number,
 ): number {
   if (kind === 'cross') return raw
-  if (architecture === 'encoder') return raw
+
   if (architecture === 'encdec' && qi >= srcLen) {
     const dqi = qi - srcLen
     const dkj = kj - srcLen
     if (dkj > dqi) return Number.NEGATIVE_INFINITY
+    if (window > 0 && kj !== 0 && dqi - dkj > window) return Number.NEGATIVE_INFINITY
     return raw
   }
-  if (kj > qi) return Number.NEGATIVE_INFINITY
+
+  const causal = architecture !== 'encoder'
+  if (causal && kj > qi) return Number.NEGATIVE_INFINITY
+  if (window > 0) {
+    const dist = causal ? qi - kj : Math.abs(qi - kj)
+    const sink = causal && kj === 0
+    if (!sink && dist > window) return Number.NEGATIVE_INFINITY
+  }
   return raw
 }
 
@@ -122,30 +135,47 @@ function runHeads(
   kind: 'self' | 'cross',
   kvSource: number[][],
   srcLen: number,
-): HeadTrace[] {
+  qkNorm: boolean,
+  window: number,
+  mla?: { down: number[][]; uk: number[][]; uv: number[][] },
+): { heads: HeadTrace[]; latent?: number[][] } {
   const headDim = dModel / nHeads
   const Q = projectRows(xs, Wq)
-  const K = projectRows(kvSource, Wk)
-  const V = projectRows(kvSource, Wv)
+  let K: number[][]
+  let V: number[][]
+  let latent: number[][] | undefined
+  const useMla = Boolean(mla) && kind === 'self'
+  if (useMla && mla) {
+    latent = projectRows(kvSource, mla.down)
+    K = projectRows(latent, mla.uk)
+    V = projectRows(latent, mla.uv)
+  } else {
+    K = projectRows(kvSource, Wk)
+    V = projectRows(kvSource, Wv)
+  }
   const scale = 1 / Math.sqrt(headDim)
   const seqQ = Q.length
   const seqK = K.length
   const useRope = positional === 'rope'
   const useAlibi = positional === 'alibi' && kind === 'self'
+  const qkGamma = qkNorm ? new Array<number>(headDim).fill(1) : null
+  const kvHeads = useMla ? nHeads : nKvHeads
 
   const heads = new Array<HeadTrace>(nHeads)
   for (let h = 0; h < nHeads; h++) {
-    const kvh = kvHeadIndex(h, nHeads, nKvHeads)
+    const kvh = kvHeadIndex(h, nHeads, kvHeads)
     const qOff = h * headDim
     const kOff = kvh * headDim
     const qHead = new Array<number[]>(seqQ)
     for (let pos = 0; pos < seqQ; pos++) {
-      const slice = Q[pos]!.slice(qOff, qOff + headDim)
+      let slice = Q[pos]!.slice(qOff, qOff + headDim)
+      if (qkGamma) slice = rmsNorm(slice, qkGamma)
       qHead[pos] = useRope ? applyRope(slice, pos) : slice
     }
     const kHead = new Array<number[]>(seqK)
     for (let pos = 0; pos < seqK; pos++) {
-      const slice = K[pos]!.slice(kOff, kOff + headDim)
+      let slice = K[pos]!.slice(kOff, kOff + headDim)
+      if (qkGamma) slice = rmsNorm(slice, qkGamma)
       kHead[pos] = useRope && kind === 'self' ? applyRope(slice, pos) : slice
     }
     const vHead = new Array<number[]>(seqK)
@@ -168,7 +198,7 @@ function runHeads(
         s *= scale
         if (useAlibi) s += alibiBias(qi, kj, h, nHeads)
         rawRow[kj] = s
-        const masked = maskScore(s, qi, kj, architecture, kind, srcLen)
+        const masked = maskScore(s, qi, kj, architecture, kind, srcLen, window)
         maskRow[kj] = masked
         finite[kj] = Number.isFinite(masked) ? masked : -1e9
       }
@@ -186,7 +216,7 @@ function runHeads(
     }
     heads[h] = { q: qHead, k: kHead, v: vHead, scoresRaw, scoresMasked, attn, out }
   }
-  return heads
+  return { heads, latent }
 }
 
 function concatHeads(heads: HeadTrace[]): number[][] {
@@ -263,6 +293,9 @@ type LayerWeights = {
   W1: number[][]
   W2: number[][]
   Wg: number[][]
+  mlaDown: number[][]
+  mlaUk: number[][]
+  mlaUv: number[][]
   cross?: { WcQ: number[][]; WcK: number[][]; WcV: number[][]; WcO: number[][] }
 }
 
@@ -286,6 +319,9 @@ function allocLayerWeights(rand: () => number, dModel: number, withCross: boolea
     W1: randomMatrix(hidden, dModel, rand),
     W2: randomMatrix(dModel, hidden, rand),
     Wg: randomMatrix(hidden, dModel, rand),
+    mlaDown: randomMatrix(mlaRank(dModel), dModel, rand),
+    mlaUk: randomMatrix(dModel, mlaRank(dModel), rand),
+    mlaUv: randomMatrix(dModel, mlaRank(dModel), rand),
   }
   if (withCross) {
     w.cross = {
@@ -304,7 +340,7 @@ const WEIGHT_CACHE_MAX = 12
 const weightCache = new Map<string, WeightPack>()
 
 function weightKey(cfg: ModelConfig): string {
-  return `${cfg.seed}|${cfg.nLayers}|${cfg.dModel}|${cfg.architecture === 'encdec' ? 'encdec' : 'mono'}`
+  return `${cfg.seed}|${cfg.nLayers}|${cfg.dModel}|${cfg.architecture === 'encdec' ? 'encdec' : 'mono'}|w3`
 }
 
 function getWeightPack(cfg: ModelConfig): WeightPack {
@@ -357,7 +393,8 @@ function runStack(
     const w = weights[li]!
     const input = copyRows(h)
     const n1 = normRows(input, cfg.norm, w.gamma1, w.beta1)
-    const heads = runHeads(
+    const mla = cfg.attention === 'mla' ? { down: w.mlaDown, uk: w.mlaUk, uv: w.mlaUv } : undefined
+    const selfAttn = runHeads(
       n1,
       nHeads,
       nKv,
@@ -370,7 +407,11 @@ function runStack(
       'self',
       n1,
       srcLen,
+      cfg.qkNorm,
+      cfg.window,
+      mla,
     )
+    const heads = selfAttn.heads
     const concat = concatHeads(heads)
     const attnProj = projectRows(concat, w.Wo)
     const residual1 = new Array<number[]>(input.length)
@@ -382,7 +423,7 @@ function runStack(
       const gammaC = new Array<number>(dModel)
       for (let i = 0; i < dModel; i++) gammaC[i] = 1
       const nC = normRows(residual1, cfg.norm, gammaC, w.beta1)
-      const cHeads = runHeads(
+      const cAttn = runHeads(
         nC,
         nHeads,
         nHeads,
@@ -395,7 +436,10 @@ function runStack(
         'cross',
         encoderOut,
         srcLen,
+        cfg.qkNorm,
+        0,
       )
+      const cHeads = cAttn.heads
       const cConcat = concatHeads(cHeads)
       const cProj = projectRows(cConcat, w.cross.WcO)
       afterSelf = new Array<number[]>(residual1.length)
@@ -433,6 +477,7 @@ function runStack(
       ffnHidden: ff.hidden,
       ffnOut: ff.out,
       residual2,
+      kvLatent: selfAttn.latent,
       cross,
       moe,
     })
@@ -575,3 +620,5 @@ export function tokensForView(trace: Trace): Token[] {
   if (trace.config.architecture === 'encdec' && trace.targetTokenize) return trace.targetTokenize.tokens
   return trace.tokenize.tokens
 }
+
+export { mlaRank }
