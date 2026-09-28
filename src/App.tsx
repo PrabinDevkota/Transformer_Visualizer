@@ -27,6 +27,8 @@ export default function App() {
   const [glossary, setGlossary] = useState(false)
   const [colors, setColors] = useState(false)
 
+  const [copied, setCopied] = useState(false)
+
   const patch = (p: Partial<ModelConfig>) => setCfg((c) => ({ ...c, ...p }))
   const booted = useRef(false)
 
@@ -40,6 +42,20 @@ export default function App() {
     }
     const t = p.get('t')
     if (t) setCfg((c) => ({ ...c, temperature: Number(t) || c.temperature }))
+    const pos = p.get('pos')
+    if (pos === 'rope' || pos === 'sinusoidal' || pos === 'learned' || pos === 'alibi' || pos === 'none') {
+      setCfg((c) => ({ ...c, positional: pos }))
+    }
+    const attn = p.get('attn')
+    if (attn === 'mha' || attn === 'gqa' || attn === 'mqa' || attn === 'mla') {
+      setCfg((c) => ({ ...c, attention: attn }))
+    }
+    const win = p.get('win')
+    if (win !== null) setCfg((c) => ({ ...c, window: Number(win) || 0 }))
+    const qkn = p.get('qkn')
+    if (qkn === '1' || qkn === '0') setCfg((c) => ({ ...c, qkNorm: qkn === '1' }))
+    const st = p.get('stage')
+    if (st && STAGES.some((s) => s.id === st)) setStage(st as StageId)
     booted.current = true
   }, [])
 
@@ -48,9 +64,14 @@ export default function App() {
     const p = new URLSearchParams()
     p.set('q', text)
     p.set('arch', cfg.architecture)
+    p.set('pos', cfg.positional)
+    p.set('attn', cfg.attention)
     p.set('t', String(cfg.temperature))
+    p.set('win', String(cfg.window))
+    p.set('qkn', cfg.qkNorm ? '1' : '0')
+    p.set('stage', stage)
     window.history.replaceState(null, '', `${window.location.pathname}?${p.toString()}`)
-  }, [text, cfg.architecture, cfg.temperature])
+  }, [text, cfg.architecture, cfg.positional, cfg.attention, cfg.temperature, cfg.window, cfg.qkNorm, stage])
 
   const forward = useMemo(
     () => runForward(text, target, cfg),
@@ -68,6 +89,8 @@ export default function App() {
       cfg.dModel,
       cfg.seed,
       cfg.showBos,
+      cfg.qkNorm,
+      cfg.window,
     ],
   )
   const trace = useMemo(
@@ -109,6 +132,7 @@ export default function App() {
       }
       if (e.key === 'Escape') {
         setColors(false)
+        setGlossary(false)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -235,6 +259,27 @@ export default function App() {
                 options={[1, 2, 3, 4].map((n) => ({ value: String(n), label: `${n}` }))}
               />
             </Field>
+            <Field label="QK-Norm">
+              <Select
+                value={cfg.qkNorm ? 'on' : 'off'}
+                onChange={(v) => patch({ qkNorm: v === 'on' })}
+                options={[
+                  { value: 'off', label: 'Off' },
+                  { value: 'on', label: 'On' },
+                ]}
+              />
+            </Field>
+            <Field label="Window">
+              <Select
+                value={String(cfg.window)}
+                onChange={(v) => patch({ window: Number(v) })}
+                options={[
+                  { value: '0', label: 'Full' },
+                  { value: '4', label: '4 tokens' },
+                  { value: '8', label: '8 tokens' },
+                ]}
+              />
+            </Field>
           </div>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -252,6 +297,10 @@ export default function App() {
           </Field>
         </div>
       </header>
+
+      <div className="border-b border-line md:hidden">
+        <StageNav horizontal current={stage} onPick={setStage} />
+      </div>
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-52 shrink-0 border-r border-line p-3 md:block">
@@ -280,6 +329,29 @@ export default function App() {
             <div className="mb-3 font-mono text-[10px] uppercase tracking-[0.2em] text-faint">Glossary</div>
             <Glossary />
           </aside>
+        )}
+        {glossary && (
+          <div
+            className="fixed inset-0 z-40 bg-black/60 lg:hidden"
+            onClick={() => setGlossary(false)}
+          >
+            <aside
+              className="ml-auto h-full w-[min(20rem,90vw)] overflow-y-auto border-l border-line bg-bg p-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-faint">Glossary</div>
+                <button
+                  type="button"
+                  onClick={() => setGlossary(false)}
+                  className="font-mono text-[11px] text-mute"
+                >
+                  close
+                </button>
+              </div>
+              <Glossary />
+            </aside>
+          </div>
         )}
       </div>
 
@@ -329,6 +401,18 @@ export default function App() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(window.location.href).then(() => {
+                setCopied(true)
+                window.setTimeout(() => setCopied(false), 1200)
+              })
+            }}
+            className="rounded-md border border-line px-2 py-1 font-mono text-[11px] text-mute hover:text-ink"
+          >
+            {copied ? 'copied' : 'copy link'}
+          </button>
           <button
             type="button"
             onClick={() => setColors((c) => !c)}
