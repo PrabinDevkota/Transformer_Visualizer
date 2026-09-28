@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { GLOSSARY, STAGES, type StageId } from '../content/stages'
 import { entropy, softmax } from '../engine/math'
-import { tokensForView } from '../engine/transformer'
+import { mlaRank, tokensForView } from '../engine/transformer'
 import { generateSteps, type GenStep } from '../engine/generate'
 import { classifyAttention, patternHint, patternLabel } from '../engine/patterns'
 import type { ModelConfig, Trace } from '../engine/types'
@@ -355,7 +355,11 @@ function QkvStage({ trace, layer, setLayer, token, setToken, head, setHead }: Pr
         ))}
       </div>
       <p className="mt-5 text-center text-[12px] text-mute">
-        Head {head} · dim {h.q[0]?.length}. In GQA, several Q heads share the same K/V slice — inspect GQA · MLA for the cache implication.
+        Head {head} · dim {h.q[0]?.length}
+        {trace.config.qkNorm ? ' · QK-Norm on' : ''}
+        {trace.config.attention === 'mla'
+          ? ' · MLA: K/V were up-projected from a cached latent (see GQA · MLA / KV cache).'
+          : ' · In GQA, several Q heads share the same K/V slice — inspect GQA · MLA for the cache implication.'}
       </p>
     </div>
   )
@@ -435,6 +439,9 @@ function MaskStage({ trace, layer, setLayer, token, setToken, head, setHead }: P
         {trace.config.architecture === 'decoder' && ' — causal: upper triangle is −∞ so softmax becomes 0.'}
         {trace.config.architecture === 'encoder' && ' — bidirectional: every token may look at every other token.'}
         {trace.config.architecture === 'encdec' && ' — decoder self-attn is causal; cross-attn (later) is full over the source.'}
+        {trace.config.window > 0 &&
+          ` Sliding window ${trace.config.window}: farther keys are also −∞. Position 0 (the sink) stays visible.`}
+        {trace.config.qkNorm && ' QK-Norm is on: each head’s Q and K are RMSNormed before the scores.'}
       </p>
       <Heatmap
         matrix={h.scoresMasked}
@@ -444,13 +451,24 @@ function MaskStage({ trace, layer, setLayer, token, setToken, head, setHead }: P
         onPick={(r) => setToken(r)}
         explain={(r, c, v) => {
           const legal = Number.isFinite(v)
+          const win = trace.config.window
+          let rule = 'past / self'
+          if (!legal) {
+            if (c > r) rule = 'future'
+            else if (win > 0 && c === 0) rule = 'sink (should be visible)'
+            else if (win > 0 && r - c > win) rule = `beyond window ${win}`
+            else if (win > 0 && Math.abs(r - c) > win) rule = `beyond window ${win}`
+            else rule = 'blocked'
+          } else if (win > 0 && c === 0 && r > win) {
+            rule = 'attention sink'
+          }
           return {
             title: legal ? `${labels[r]} can see ${labels[c]}` : `${labels[r]} cannot see ${labels[c]}`,
             facts: [
               { k: 'raw score', v: fmt(h.scoresRaw[r]?.[c] ?? 0, 5) },
               { k: 'after mask', v: legal ? fmt(v, 5) : '−∞' },
               { k: 'allowed', v: legal ? 'yes' : 'no' },
-              { k: 'rule', v: r >= c ? 'past / self' : 'future' },
+              { k: 'rule', v: rule },
             ],
             note: legal
               ? 'This cell stays a real number and will get probability mass in softmax.'
@@ -877,13 +895,17 @@ function KvStage({ trace, head, setHead, token, setToken, layer, setLayer }: Pro
   const [sel, setSel] = useState(0)
   const w = decodeScores[head]?.[sel] ?? 0
   const kvec = prefillK[head]?.[sel]
+  const L = trace.layers[layer] ?? trace.layers[0]!
+  const latent = L.kvLatent
+  const dc = latent?.[0]?.length ?? 0
+  const dH = kvec?.length ?? 0
   return (
     <div>
       <Controls heads {...{ trace, token, head, layer, setToken, setHead, setLayer }} />
       <div className="mb-4 flex justify-center gap-6 text-[12px] text-mute">
         <span>
           <i className="mr-2 inline-block h-2 w-2 rounded-full bg-gold not-italic" />
-          prefill: write K,V for all {seq} tokens
+          prefill: write {latent ? `latent c (${dc})` : 'K,V'} for all {seq} tokens
         </span>
         <span>
           <i className="mr-2 inline-block h-2 w-2 rounded-full bg-teal not-italic" />
@@ -921,11 +943,29 @@ function KvStage({ trace, head, setHead, token, setToken, layer, setLayer }: Pro
           { k: 'decode α', v: fmt(w, 5) },
           { k: 'K vector', v: (kvec ?? []).map((x) => fmt(x, 2)).join('  ') },
           { k: 'head', v: String(head) },
+          ...(latent
+            ? [
+                { k: 'cached c', v: (latent[sel] ?? []).map((x) => fmt(x, 2)).join('  ') },
+                { k: 'd_c / d_h', v: `${dc} / ${dH}` },
+              ]
+            : []),
         ]}
-        note="During decode, this K (and V) is reused. Only the new token computes a fresh Q, K, V; history is read from cache."
+        note={
+          latent
+            ? 'MLA: the cache holds c, not this K. At decode, c is up-projected to K and V, then dotted with the new Q. That is why the stored width is d_c, not n_heads × d_h.'
+            : 'During decode, this K (and V) is reused. Only the new token computes a fresh Q, K, V; history is read from cache.'
+        }
       />
+      {latent && (
+        <div className="mt-6">
+          <h3 className="mb-2 text-[12px] uppercase tracking-[0.16em] text-faint">Cached latents c (what MLA actually stores)</h3>
+          <VectorStrip rows={latent} labels={toks.map((t) => t.text)} name="c" note="Low-rank KV. Up-projection happens at attention time, not in the cache." />
+        </div>
+      )}
       <p className="mt-5 max-w-2xl text-[12px] leading-5 text-mute">
-        Cache size ≈ layers × KV heads × sequence × dₕ × 2 (K and V) × bytes. That is why GQA, MLA, sliding windows, and quantization exist. Decode is usually memory-bound: the GPU spends its time reading this cache, not multiplying.
+        {latent
+          ? `MLA cache ≈ layers × sequence × d_c (${dc}) × bytes. MHA would store layers × ${trace.config.nHeads} heads × sequence × dₕ (${dH}) × 2. Switch Attention in the top bar and compare.`
+          : 'Cache size ≈ layers × KV heads × sequence × dₕ × 2 (K and V) × bytes. That is why GQA, MLA, sliding windows, and quantization exist. Decode is usually memory-bound: the GPU spends its time reading this cache, not multiplying.'}
       </p>
       {decodeQ[head] && (
         <div className="mt-6">
@@ -1007,12 +1047,52 @@ function ArchBlock({ x, y, label, sub }: { x: number; y: number; label: string; 
 
 function GqaStage({ cfg }: { cfg: ModelConfig }) {
   const q = cfg.nHeads
-  const kv = cfg.attention === 'mha' ? q : cfg.attention === 'mqa' ? 1 : cfg.nKvHeads
+  const kv = cfg.attention === 'mha' ? q : cfg.attention === 'mqa' ? 1 : cfg.attention === 'mla' ? 1 : cfg.nKvHeads
+  const dH = cfg.dModel / cfg.nHeads
+  const dc = mlaRank(cfg.dModel)
+  const seqNote = 'seq'
+  const mhaBytes = `MHA cache ∝ ${seqNote} × ${q} × ${dH} × 2`
+  const gqaBytes = `GQA cache ∝ ${seqNote} × ${kv} × ${dH} × 2`
+  const mlaBytes = `MLA cache ∝ ${seqNote} × ${dc}  (latent, not per-head K/V)`
+  const isMla = cfg.attention === 'mla'
   return (
     <div>
       <p className="mb-5 text-[13px] text-mute">
-        Current attention: <span className="text-gold">{cfg.attention.toUpperCase()}</span> · {q} query heads · {kv} KV heads
+        Current attention: <span className="text-gold">{cfg.attention.toUpperCase()}</span>
+        {isMla
+          ? ` · ${q} query heads · latent rank d_c = ${dc} (cached) · then up-project to K/V`
+          : ` · ${q} query heads · ${kv} KV heads`}
       </p>
+      {isMla ? (
+        <svg viewBox="0 0 640 220" className="w-full max-w-3xl">
+          {Array.from({ length: q }, (_, i) => (
+            <g key={`q${i}`}>
+              <rect x={20} y={16 + i * 48} width={72} height={36} rx={4} fill="#101114" stroke="#d4b483" />
+              <text x={56} y={38 + i * 48} textAnchor="middle" fill="#d4b483" fontSize={11}>
+                Q{i}
+              </text>
+              <line x1="92" y1={34 + i * 48} x2="250" y2="110" stroke="#8b8a84" />
+            </g>
+          ))}
+          <rect x={250} y={88} width={120} height={44} rx={4} fill="#101114" stroke="#7aa8a0" />
+          <text x={310} y={108} textAnchor="middle" fill="#7aa8a0" fontSize={12}>
+            c  d_c={dc}
+          </text>
+          <text x={310} y={124} textAnchor="middle" fill="#8b8a84" fontSize={10}>
+            cached latent
+          </text>
+          <line x1="370" y1="110" x2="460" y2="70" stroke="#8b8a84" />
+          <line x1="370" y1="110" x2="460" y2="150" stroke="#8b8a84" />
+          <rect x={460} y={50} width={72} height={36} rx={4} fill="#101114" stroke="#d4b483" />
+          <text x={496} y={72} textAnchor="middle" fill="#d4b483" fontSize={11}>
+            ↑ K
+          </text>
+          <rect x={460} y={130} width={72} height={36} rx={4} fill="#101114" stroke="#d4b483" />
+          <text x={496} y={152} textAnchor="middle" fill="#d4b483" fontSize={11}>
+            ↑ V
+          </text>
+        </svg>
+      ) : (
       <svg viewBox="0 0 640 220" className="w-full max-w-3xl">
         {Array.from({ length: q }, (_, i) => (
           <g key={`q${i}`}>
@@ -1043,10 +1123,11 @@ function GqaStage({ cfg }: { cfg: ModelConfig }) {
           {kv} × seq × d
         </text>
       </svg>
+      )}
       <div className="mt-6 grid gap-4 md:grid-cols-3 text-[12px] leading-5 text-mute">
-        <p><b className="text-ink font-medium">MHA</b> — one KV per query head. Best quality, fattest cache. GPT-2, original Transformer.</p>
-        <p><b className="text-ink font-medium">GQA</b> — groups of queries share KV. Llama 2/3, Mistral, Qwen. The current default.</p>
-        <p><b className="text-ink font-medium">MLA</b> — cache a low-rank latent, not full KV. DeepSeek-V2/V3. Compress then absorb into RoPE.</p>
+        <p><b className="text-ink font-medium">MHA</b> — one KV per query head. Best quality, fattest cache. GPT-2, original Transformer. {mhaBytes}.</p>
+        <p><b className="text-ink font-medium">GQA / MQA</b> — groups of queries share KV. Llama, Mistral, Qwen. {gqaBytes}.</p>
+        <p><b className="text-ink font-medium">MLA</b> — cache a low-rank latent, then up-project. DeepSeek-V2/V3. {mlaBytes}. Switch the Attention dropdown: the heatmap still has one head per Q, but the cache is c, not K and V.</p>
       </div>
     </div>
   )
