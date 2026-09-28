@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'motion/react'
-import { diverging, ink, MASK_COLOR, maxAbs, maxVal, sequential } from './color'
+import { diverging, ink, MASK_COLOR, sequential } from './color'
 import { CompactScale } from './ColorLegend'
 import { InspectPanel, fmt, type Fact } from './Inspect'
 
@@ -47,14 +47,35 @@ export function Heatmap({
     return () => ro.disconnect()
   }, [])
 
+  useEffect(() => {
+    setSel((prev) => {
+      if (!prev) return prev
+      const v = matrix[prev.r]?.[prev.c]
+      if (v === undefined) return null
+      return { r: prev.r, c: prev.c, v }
+    })
+  }, [matrix])
+
   if (!matrix.length || !matrix[0]?.length) {
     return <div className="text-[12px] text-mute">No matrix yet.</div>
   }
 
   const rows = matrix.length
   const cols = matrix[0].length
-  const abs = maxAbs(matrix.map((row) => row.map((v) => (Number.isFinite(v) ? v : 0))))
-  const mx = maxVal(matrix.map((row) => row.map((v) => (Number.isFinite(v) ? v : 0))))
+  let abs = 0
+  let mx = 0
+  for (let i = 0; i < rows; i++) {
+    const row = matrix[i]!
+    for (let j = 0; j < cols; j++) {
+      const v = row[j]!
+      if (!Number.isFinite(v)) continue
+      const a = v < 0 ? -v : v
+      if (a > abs) abs = a
+      if (v > mx) mx = v
+    }
+  }
+  abs = abs || 1
+  mx = mx || 1
   const labelW = rowLabels ? 80 : 8
   const labelH = colLabels ? 56 : 8
   const autoCell = Math.floor((box - labelW - 16) / Math.max(cols, 1))
@@ -73,6 +94,7 @@ export function Heatmap({
   const extra = active ? explain?.(active.r, active.c, active.v) : undefined
   const row = active ? (rowLabels?.[active.r] ?? `row ${active.r}`) : ''
   const col = active ? (colLabels?.[active.c] ?? `col ${active.c}`) : ''
+  const animateCells = inspect && cellSize >= 24
   const rank =
     active &&
     1 +
@@ -141,9 +163,9 @@ export function Heatmap({
                     width={cellSize - 3}
                     height={cellSize - 3}
                     rx={4}
-                    initial={{ opacity: 0, scale: 0.7 }}
+                    initial={animateCells ? { opacity: 0, scale: 0.7 } : false}
                     animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: (i * cols + j) * 0.008, duration: 0.22 }}
+                    transition={animateCells ? { delay: (i * cols + j) * 0.008, duration: 0.22 } : { duration: 0 }}
                     fill={fill}
                     stroke={on ? '#eceae4' : 'transparent'}
                     strokeWidth={on ? 2 : 0}
@@ -183,7 +205,7 @@ export function Heatmap({
                 { k: 'key (col)', v: `${col}  ·  j=${active.c}` },
                 { k: mode === 'prob' ? 'probability' : 'score', v: fmt(active.v, 5) },
                 { k: 'rank in row', v: rank ? `${rank} / ${cols}` : '—' },
-                { k: 'future?', v: active.c > active.r ? 'yes — masked in decoder' : 'no' },
+                { k: 'masked', v: Number.isFinite(active.v) ? 'no' : 'yes' },
                 ...(extra?.facts ?? []),
               ]
             : undefined
