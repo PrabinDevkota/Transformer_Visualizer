@@ -22,6 +22,10 @@ export interface ModelConfig {
   dModel: number
   seed: number
   showBos: boolean
+  /** RMSNorm on each Q/K head before RoPE (OLMo 2, some Qwen). */
+  qkNorm: boolean
+  /** Causal/local span. 0 = full context. Position 0 stays visible as an attention sink. */
+  window: number
 }
 
 export interface Token {
@@ -74,6 +78,8 @@ export interface LayerTrace {
   ffnHidden: number[][]
   ffnOut: number[][]
   residual2: number[][]
+  /** MLA only: the low-rank latent actually stored in the KV cache (seq × d_c). */
+  kvLatent?: number[][]
   cross?: CrossTrace
   moe?: {
     router: number[][]
@@ -133,4 +139,6 @@ export const DEFAULT_CONFIG: ModelConfig = {
   dModel: 16,
   seed: 7,
   showBos: true,
+  qkNorm: false,
+  window: 0,
 }
