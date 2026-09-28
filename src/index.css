@@ -89,6 +89,12 @@ select option {
   color: #e8d7b0;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
 .story {
   color: #8b8a84;
   font-size: 15px;
